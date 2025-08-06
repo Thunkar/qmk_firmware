@@ -1,0 +1,61 @@
+{
+    "manufacturer": "thunkar",
+    "keyboard_name": "euk_mini",
+    "maintainer": "thunkar",
+    "development_board": "promicro_rp2040",
+    "diode_direction": "COL2ROW",
+    "features": {
+        "bootmagic": true,
+        "extrakey": true,
+        "mousekey": true,
+        "nkro": true,
+        "rgb_matrix": true
+    },
+    "rgb_matrix": {
+        "animations": {
+            "breathing": true,
+            "rainbow_mood": true
+        },
+        "driver": "ws2812",
+        "layout": [
+            { "matrix": [2, 0], "x": 224, "y": 0, "flags": 4 },
+            { "matrix": [1, 0], "x": 112, "y": 0, "flags": 4 },
+            { "matrix": [0, 0], "x": 0, "y": 0, "flags": 4 },
+            { "matrix": [0, 1], "x": 0, "y": 32, "flags": 4 },
+            { "matrix": [1, 1], "x": 112, "y": 32, "flags": 4 },
+            { "matrix": [2, 1], "x": 224, "y": 32, "flags": 4 },
+            { "matrix": [2, 2], "x": 224, "y": 64, "flags": 4 },
+            { "matrix": [1, 2], "x": 112, "y": 64, "flags": 4 },
+            { "matrix": [0, 2], "x": 0, "y": 64, "flags": 4 }
+        ]
+    },
+    "ws2812": {
+        "pin": "GP29",
+        "driver": "vendor"
+    },
+    "matrix_pins": {
+        "cols": ["GP14", "GP13", "GP12"],
+        "rows": ["GP1", "GP2", "GP3"]
+    },
+    "url": "",
+    "usb": {
+        "device_version": "1.0.0",
+        "pid": "0x0000",
+        "vid": "0xFEED"
+    },
+    "layouts": {
+        "LAYOUT": {
+            "layout": [
+                { "matrix": [0, 0], "x": 0, "y": 0 },
+                { "matrix": [0, 1], "x": 1, "y": 0 },
+                { "matrix": [0, 2], "x": 2, "y": 0 },
+                { "matrix": [1, 0], "x": 0, "y": 1 },
+                { "matrix": [1, 1], "x": 1, "y": 1 },
+                { "matrix": [1, 2], "x": 2, "y": 1 },
+                { "matrix": [2, 0], "x": 0, "y": 2 },
+                { "matrix": [2, 1], "x": 1, "y": 2 },
+                { "matrix": [2, 2], "x": 2, "y": 2 }
+            ]
+        }
+    }
+}
