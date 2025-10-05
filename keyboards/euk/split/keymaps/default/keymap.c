@@ -6,7 +6,8 @@
 #include "analog.h"
 #include <transactions.h>
 
-#define POT_PIN GP26
+#define ADC_PIN GP26
+#define ADC_SAMPLES 50
 
 enum layers {
     _QWERTY = 0,
@@ -40,7 +41,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
       KC_LSFT , KC_Z    ,  KC_X   ,  KC_C  ,  KC_V  ,  KC_B ,                                           KC_N  ,  KC_M  ,  KC_COMM , KC_DOT  , KC_SLSH  ,  KC_RBRC ,         
       KC_LCTL , KC_LGUI ,  KC_LALT,  MO(2) ,  MO(1) ,                                                           KC_ENT ,  KC_RGUI , KC_RALT , KC_HOME  ,  KC_DEL  ,
                                                             KC_BRID , KC_BRIU,        KC_VOLD , KC_VOLU,                     
-                                                            KC_SPC  , KC_LEFT ,       KC_NUBS , KC_SPC
+                                                            KC_SPC  , _______ ,       KC_NUBS , KC_SPC
     ),
 
     /* Util
@@ -72,40 +73,78 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
+// qsort requires you to create a sort function
+int sort_desc(const void *cmp1, const void *cmp2) {
+  // Need to cast the void * to int *
+  uint8_t a = *((uint8_t *)cmp1);
+  uint8_t b = *((uint8_t *)cmp2);
+  // The comparison
+  return a > b ? -1 : (a < b ? 1 : 0);
+}
+
+uint8_t sample_adc(const int pin) {
+  uint8_t measurements[ADC_SAMPLES];
+
+  for (int i = 0; i < ADC_SAMPLES; i++) {
+    measurements[i] = analogReadPin(ADC_PIN) >>2;
+  }
+
+  qsort(measurements, ADC_SAMPLES, sizeof(measurements[0]), sort_desc);
+
+  uint16_t sum = 0;
+
+  // Skip the first 10 and last 10 samples to avoid outliers
+  for (int i = 10; i < ADC_SAMPLES - 10; i++) {
+    sum += measurements[i];
+  }
+
+  return (uint8_t)(sum/(uint16_t)(ADC_SAMPLES - 2));
+}
+
+// Encoder
+uint32_t encoder_timer;
 uint8_t last_val = 0;
-uint32_t last_sync = 0;
 uint8_t pressed = 0;    
 uint8_t last_pressed = 0;
 
+// Joystick
+uint32_t joystick_timer;
+uint8_t raw_x = 0;
+uint8_t raw_y = 0;
+int16_t x = 0;
+int16_t y = 0;
+
 typedef struct _slave_to_master_t {
-    uint8_t s2m_data;
+    uint8_t x;
+    uint8_t y;
 } slave_to_master_t;
 
 typedef struct _master_to_slave_t {
     int m2s_data;
 } master_to_slave_t;
 
-void user_encoder_press_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
+void user_joystick_sync_handler(uint8_t in_buflen, const void *in_data, uint8_t out_buflen, void *out_data) {
     slave_to_master_t *s2m = (slave_to_master_t*)out_data;
-    s2m->s2m_data = pressed;
-    pressed = 0;
+    s2m->x = raw_x;
+    s2m->y = raw_y;
 }
 
 void keyboard_post_init_user(void) {
-    transaction_register_rpc(ENCODER_PRESS_SYNC, user_encoder_press_sync_handler);
+    transaction_register_rpc(JOYSTICK_SYNC, user_joystick_sync_handler);
+    if(!is_keyboard_master()) {
+        gpio_set_pin_output(GP22);    
+        gpio_set_pin_output(GP20);
+    }
 }
 
 void sync_with_slave(void) {
-    if(timer_elapsed32(last_sync) > 100) {
+    if(timer_elapsed32(joystick_timer) > 100) {
         master_to_slave_t m2s = {0};
         slave_to_master_t s2m = {0};
-        if(transaction_rpc_exec(ENCODER_PRESS_SYNC, sizeof(m2s), &m2s, sizeof(s2m), &s2m)) {
-            last_sync = timer_read32();
-            pressed = s2m.s2m_data;
-            if(pressed && !last_pressed) {
-                tap_code(KC_MUTE);
-            }
-            last_pressed = pressed;
+        if(transaction_rpc_exec(JOYSTICK_SYNC, sizeof(m2s), &m2s, sizeof(s2m), &s2m)) {
+            joystick_timer = timer_read32();
+            raw_x = s2m.x;
+            raw_y = s2m.y;
         } else {
             uprintf("Slave sync failed!\n");
         }
@@ -113,7 +152,7 @@ void sync_with_slave(void) {
 }
 
 void check_pot(void) {
-    uint8_t current_val = analogReadPin(POT_PIN) >>2;
+    uint8_t current_val = analogReadPin(ADC_PIN) >>2;
     if (current_val < 6) current_val = 0;
     if (current_val > 249) current_val = 255;
     int change = last_val - current_val; 
@@ -123,31 +162,80 @@ void check_pot(void) {
     last_val = current_val;
 }
 
+void sample_joystick(void) {
+    gpio_write_pin_high(GP20);
+    gpio_write_pin_low(GP22);
+    raw_x = sample_adc(ADC_PIN);
+    gpio_write_pin_high(GP22);
+    gpio_write_pin_low(GP20);
+    raw_y = sample_adc(ADC_PIN);
+}
+
+report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
+    if (timer_elapsed(joystick_timer) < 10) {
+        wait_ms(2);
+        return mouse_report;
+    }
+
+    x = (int16_t)raw_x - 70;
+    x = x > 0 ? x/2 : x;
+    y = (int16_t)raw_y - 70;
+    y = y > 0 ? y/2 : y;
+    y = -y;
+
+    // Create a dead zone in the middle where the mouse doesn't move
+    const int16_t dead_zone = 5;
+    if ((y < 0 && y > -1*dead_zone) || (y > 0 && y < dead_zone)) {
+        y = 0;
+    }
+    if ((x < 0 && x > -1*dead_zone) || (x > 0 && x < dead_zone)) {
+        x = 0;
+    }
+
+    // quadratic movement
+    x = abs(x) * x / 200;
+    y = abs(y) * y / 200;
+
+    // Clamp final value to make sure we don't under/overflow
+    if (y < -127) { y = -127; }
+    if (y > 127) { y = 127; }
+    if (x < -127) { x = -127; }
+    if (x > 127) { x = 127; }
+
+    mouse_report.x = x;
+    mouse_report.y = y;
+
+    return mouse_report;
+}
+
+void pointing_device_driver_init(void) {
+}
+
 void check_encoder_push(void) {
-    if(timer_elapsed32(last_sync) > 100) {
-        uint8_t current_val = analogReadPin(POT_PIN) >>2;;
+    if(timer_elapsed32(encoder_timer) > 100) {
+        uint8_t current_val = analogReadPin(ADC_PIN) >>2;
         pressed = current_val < 10 && last_val < 10;
-        last_sync = timer_read32(); 
+        encoder_timer = timer_read32(); 
         last_val = current_val;
+        if(pressed && !last_pressed) {
+            tap_code(KC_MUTE);
+        }
+        last_pressed = pressed;
     }
 }
 
 void housekeeping_task_user(void) {
     if (is_keyboard_master()) {
         sync_with_slave();
-        check_pot();
-    } else {
         check_encoder_push();
+    } else {
+        sample_joystick();
     } 
 }
 
 // Rotate OLED
 // Image MUST be converted to VERTICAL on image2cpp*******
 oled_rotation_t oled_init_user(oled_rotation_t rotation) { 
-    if(!is_keyboard_master()) {
-        return OLED_ROTATION_270; // left display
-    }
-
     return OLED_ROTATION_90;
 }
 

@@ -11,15 +11,8 @@
         "nkro": true,
         "oled": true,
         "rgb_matrix": true,
-        "encoder": true
-    },
-    "encoder": {
-        "rotary": [
-            {
-                "pin_a": "GP22",
-                "pin_b": "GP20"
-            }
-        ]
+        "encoder": true,
+        "pointing_device": true
     },
     "rgb_matrix": {
         "animations": {
@@ -139,6 +132,14 @@
     "ws2812": {
         "pin": "GP29",
         "driver": "vendor"
+    },
+    "encoder": {
+        "rotary": [
+            {
+                "pin_a": "GP22",
+                "pin_b": "GP20"
+            }
+        ]
     },
     "split": {
         "enabled": true,
