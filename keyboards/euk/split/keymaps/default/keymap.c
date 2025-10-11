@@ -314,7 +314,7 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
 
     // Hardware-specific ADC range with asymmetric limits (10-bit: 0-1023)
     // Calibrated for single-axis range; diagonal extremes will be clamped
-    const int16_t adc_min = 150;
+    const int16_t adc_min = 160;
     const int16_t adc_center = 450;
     const int16_t adc_max = 920;
 
