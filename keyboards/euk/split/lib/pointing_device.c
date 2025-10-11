@@ -98,27 +98,39 @@ static int16_t normalize_adc(uint16_t raw_value, int16_t adc_min, int16_t adc_ce
     return normalized;
 }
 
-// Apply smooth two-step curve: linear in center (0-85%), quadratic after 85%
+// Apply three-stage curve: amplified center, linear middle, quadratic high
 static int16_t apply_curve(int16_t normalized_value) {
-    const int16_t threshold = 85;  // 85% deflection threshold
+    const int16_t center_threshold = 15;   // Center amplification zone endpoint
+    const int16_t high_threshold = 85;     // High acceleration zone starting point
+    const float center_amplification = 3.0f;  // Amplification factor for center movements
+
     int16_t abs_val = abs(normalized_value);
     int16_t sign = (normalized_value < 0) ? -1 : 1;
 
-    if (abs_val <= threshold) {
-        // Linear region: 0-85% deflection
-        return normalized_value;
+    if (abs_val <= center_threshold) {
+        // Amplified center region: overcome global dampening with increased sensitivity
+        int16_t amplified = (int16_t)((float)abs_val * center_amplification);
+        return sign * amplified;
+    } else if (abs_val <= high_threshold) {
+        // Linear middle region: smooth transition between amplified center and high acceleration zone
+        // Maps from the amplified center endpoint to the high threshold with linear interpolation
+        int16_t range_start = (int16_t)((float)center_threshold * center_amplification);
+        int16_t range_end = high_threshold;
+        int16_t input_range = high_threshold - center_threshold;
+        int16_t output_range = range_end - range_start;
+
+        int16_t offset = abs_val - center_threshold;
+        int16_t linear_value = range_start + (offset * output_range) / input_range;
+
+        return sign * linear_value;
     } else {
-        // Quadratic region: 85-100% deflection with gentle acceleration
-        // Calculate value at threshold end (this is our starting point)
-        int16_t linear_end = threshold;
+        // Quadratic high region: gentle acceleration beyond the high threshold
+        int16_t linear_end = high_threshold;
+        int16_t excess = abs_val - high_threshold;
 
-        // Calculate excess beyond threshold
-        int16_t excess = abs_val - threshold;
-
-        // Apply gentle quadratic curve to the excess
-        // Map remaining 15% input (85-100) to remaining output (64-87)
-        // Target: at 100% we want ~87 output (25% boost from linear continuation, was 33%)
-        int16_t quadratic_part = (excess * excess * 102) / 225;  // Scaled to reach ~87 at 100%
+        // Apply gentle quadratic curve to the excess deflection
+        // Scaled to provide smooth acceleration for precise fast movements
+        int16_t quadratic_part = (excess * excess * 102) / 225;
 
         return sign * (linear_end + quadratic_part);
     }
