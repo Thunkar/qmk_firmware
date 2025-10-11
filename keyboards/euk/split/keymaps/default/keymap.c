@@ -8,6 +8,8 @@
 
 #define ADC_PIN GP26
 #define ADC_SAMPLES 50
+#define MOVING_AVG_SIZE 10  // Number of samples for moving average filter
+#define CURSOR_SPEED_FACTOR 0.03f  // Global speed multiplier (0.0-1.0). Adjust to reduce/increase overall speed
 
 enum layers {
     _QWERTY = 0,
@@ -73,6 +75,44 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 };
 // clang-format on
 
+// Moving average buffer structure
+typedef struct {
+    uint16_t buffer[MOVING_AVG_SIZE];
+    uint8_t index;
+    uint8_t count;
+    uint32_t sum;
+} moving_avg_t;
+
+// Initialize moving average buffer
+void moving_avg_init(moving_avg_t *avg) {
+    for (int i = 0; i < MOVING_AVG_SIZE; i++) {
+        avg->buffer[i] = 0;
+    }
+    avg->index = 0;
+    avg->count = 0;
+    avg->sum = 0;
+}
+
+// Add new sample to moving average and return the current average
+uint16_t moving_avg_update(moving_avg_t *avg, uint16_t new_sample) {
+    // Remove old value from sum if buffer is full
+    if (avg->count == MOVING_AVG_SIZE) {
+        avg->sum -= avg->buffer[avg->index];
+    } else {
+        avg->count++;
+    }
+
+    // Add new value
+    avg->buffer[avg->index] = new_sample;
+    avg->sum += new_sample;
+
+    // Move to next position (circular buffer)
+    avg->index = (avg->index + 1) % MOVING_AVG_SIZE;
+
+    // Return average
+    return (uint16_t)(avg->sum / avg->count);
+}
+
 // qsort requires you to create a sort function
 int sort_desc(const void *cmp1, const void *cmp2) {
   // Cast to uint16_t for full 10-bit ADC range
@@ -82,7 +122,12 @@ int sort_desc(const void *cmp1, const void *cmp2) {
   return a > b ? -1 : (a < b ? 1 : 0);
 }
 
-uint16_t sample_adc(const int pin) {
+// Separate moving average buffers for X and Y axes
+static moving_avg_t moving_avg_x = {0};
+static moving_avg_t moving_avg_y = {0};
+static bool moving_avg_initialized = false;
+
+uint16_t sample_adc(const int pin, moving_avg_t *moving_avg) {
   uint16_t measurements[ADC_SAMPLES];
 
   for (int i = 0; i < ADC_SAMPLES; i++) {
@@ -102,7 +147,10 @@ uint16_t sample_adc(const int pin) {
     sum += measurements[i];
   }
 
-  return (uint16_t)(sum / (uint32_t)valid_samples);
+  uint16_t current_sample = (uint16_t)(sum / (uint32_t)valid_samples);
+
+  // Apply moving average filter to smooth transitions
+  return moving_avg_update(moving_avg, current_sample);
 }
 
 // Encoder
@@ -174,15 +222,88 @@ void check_pot(void) {
     last_val = current_val;
 }
 
+// Normalize ADC value to -100 to 100 range with asymmetric calibration
+int16_t normalize_adc(uint16_t raw_value, int16_t adc_min, int16_t adc_center, int16_t adc_max) {
+    int16_t range_low = adc_center - adc_min;
+    int16_t range_high = adc_max - adc_center;
+    int16_t normalized;
+
+    if (raw_value < adc_center) {
+        // Map lower range to negative values
+        normalized = ((int16_t)raw_value - adc_center) * 100 / range_low;
+    } else {
+        // Map upper range to positive values
+        normalized = ((int16_t)raw_value - adc_center) * 100 / range_high;
+    }
+
+    // Clamp to expected range
+    if (normalized < -100) normalized = -100;
+    if (normalized > 100) normalized = 100;
+
+    return normalized;
+}
+
+// Apply smooth two-step curve: linear in center (0-85%), quadratic after 85%
+int16_t apply_curve(int16_t normalized_value) {
+    const int16_t threshold = 85;  // 85% deflection threshold
+    int16_t abs_val = abs(normalized_value);
+    int16_t sign = (normalized_value < 0) ? -1 : 1;
+
+    if (abs_val <= threshold) {
+        // Linear region: 0-85% deflection
+        // Scale linearly: at 85% input we want ~64% output (85 * 0.75 = 64)
+        return (normalized_value * 3) / 4;
+    } else {
+        // Quadratic region: 85-100% deflection with gentle acceleration
+        // Calculate value at threshold end (this is our starting point)
+        int16_t linear_end = (threshold * 3) / 4;  // Value at 85% = 64
+
+        // Calculate excess beyond threshold
+        int16_t excess = abs_val - threshold;
+
+        // Apply gentle quadratic curve to the excess
+        // Map remaining 15% input (85-100) to remaining output (64-87)
+        // Target: at 100% we want ~87 output (25% boost from linear continuation, was 33%)
+        int16_t quadratic_part = (excess * excess * 102) / 225;  // Scaled to reach ~87 at 100%
+
+        return sign * (linear_end + quadratic_part);
+    }
+}
+
+// Clamp value to specified range
+int16_t clamp_value(int16_t value, int16_t min_val, int16_t max_val) {
+    if (value < min_val) return min_val;
+    if (value > max_val) return max_val;
+    return value;
+}
+
 void sample_joystick(void) {
-    gpio_write_pin_high(GP20);
-    gpio_write_pin_low(GP22);
-    wait_ms(10);
-    raw_x = sample_adc(ADC_PIN);
-    gpio_write_pin_high(GP22);
-    gpio_write_pin_low(GP20);
-    wait_ms(10);
-    raw_y = sample_adc(ADC_PIN);
+    static uint32_t last_sample = 0;
+    static bool sample_x_next = true;  // Track which axis to sample next
+
+    // Initialize moving average buffers on first call
+    if (!moving_avg_initialized) {
+        moving_avg_init(&moving_avg_x);
+        moving_avg_init(&moving_avg_y);
+        moving_avg_initialized = true;
+    }
+
+    if (timer_elapsed32(last_sample) >= 5) {
+        if (sample_x_next) {
+            // Sample X and set up for Y next time
+            raw_x = sample_adc(ADC_PIN, &moving_avg_x);
+            gpio_write_pin_high(GP22);
+            gpio_write_pin_low(GP20);
+        } else {
+            // Sample Y and set up for X next time
+            raw_y = sample_adc(ADC_PIN, &moving_avg_y);
+            gpio_write_pin_high(GP20);
+            gpio_write_pin_low(GP22);
+        }
+
+        sample_x_next = !sample_x_next;
+        last_sample = timer_read32();
+    }
 }
 
 report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
@@ -193,34 +314,17 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
 
     // Hardware-specific ADC range with asymmetric limits (10-bit: 0-1023)
     // Calibrated for single-axis range; diagonal extremes will be clamped
-    const int16_t adc_min = 120;
+    const int16_t adc_min = 150;
     const int16_t adc_center = 450;
-    const int16_t adc_max = 930;
-    const int16_t range_low = adc_center - adc_min;
-    const int16_t range_high = adc_max - adc_center;
+    const int16_t adc_max = 920;
 
     // Linearize to normalized range (-100 to 100) for easier math
-    if (raw_x < adc_center) {
-        // Map lower range to negative values
-        x_normalized = ((int16_t)raw_x - adc_center) * 100 / range_low;
-    } else {
-        // Map upper range to positive values
-        x_normalized = ((int16_t)raw_x - adc_center) * 100 / range_high;
-    }
-
-    if (raw_y < adc_center) {
-        // Map lower range to negative values
-        y_normalized = ((int16_t)raw_y - adc_center) * 100 / range_low;
-    } else {
-        // Map upper range to positive values
-        y_normalized = ((int16_t)raw_y - adc_center) * 100 / range_high;
-    }
+    x_normalized = normalize_adc(raw_x, adc_min, adc_center, adc_max);
+    y_normalized = normalize_adc(raw_y, adc_min, adc_center, adc_max);
 
     // Clamp normalized values to expected range
-    if (x_normalized < -100) x_normalized = -100;
-    if (x_normalized > 100) x_normalized = 100;
-    if (y_normalized < -100) y_normalized = -100;
-    if (y_normalized > 100) y_normalized = 100;
+    x_normalized = clamp_value(x_normalized, -100, 100);
+    y_normalized = clamp_value(y_normalized, -100, 100);
 
     // Invert Y axis (typical for joysticks)
     y_normalized = -y_normalized;
@@ -234,68 +338,22 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
         y_normalized = 0;
     }
 
-    // Apply hybrid curve: dampened linear up to threshold, then quadratic
-    // Provides fine control near center, smooth acceleration at edges
-    const int16_t linear_threshold = 30;
-    const int16_t linear_dampening = 10;
-    int16_t x_curved, y_curved;
+    // Apply smooth quadratic curve to both axes
+    int16_t x_curved = apply_curve(x_normalized);
+    int16_t y_curved = apply_curve(y_normalized);
 
-    // Process X axis
-    if (abs(x_normalized) <= linear_threshold) {
-        // Linear region with dampening for fine control
-        x_curved = x_normalized / linear_dampening;
-    } else {
-        // Quadratic region: smooth acceleration beyond threshold
-        int16_t excess = abs(x_normalized) - linear_threshold;
-        int16_t quadratic_part = (excess * excess) / 50;  // Scaled quadratic
-        x_curved = (x_normalized < 0 ? -1 : 1) * ((linear_threshold / linear_dampening) + quadratic_part);
-    }
-
-    // Process Y axis
-    if (abs(y_normalized) <= linear_threshold) {
-        // Linear region with dampening for fine control
-        y_curved = y_normalized / linear_dampening;
-    } else {
-        // Quadratic region: smooth acceleration beyond threshold
-        int16_t excess = abs(y_normalized) - linear_threshold;
-        int16_t quadratic_part = (excess * excess) / 50;  // Scaled quadratic
-        y_curved = (y_normalized < 0 ? -1 : 1) * ((linear_threshold / linear_dampening) + quadratic_part);
-    }
-
-    // Cap magnitude for consistent speed in all directions
-    // Prevents diagonal movement from being faster than cardinal directions
-    const int16_t max_speed = 4;
-    int16_t x_limited = x_curved;
-    int16_t y_limited = y_curved;
-    if (x_curved != 0 || y_curved != 0) {
-        // Fast integer approximation of magnitude
-        int16_t abs_x = abs(x_curved);
-        int16_t abs_y = abs(y_curved);
-        int16_t magnitude = (abs_x > abs_y) ? (abs_x + abs_y / 2) : (abs_y + abs_x / 2);
-
-        if (magnitude > max_speed) {
-            // Scale both components down proportionally
-            x_limited = (x_curved * max_speed) / magnitude;
-            y_limited = (y_curved * max_speed) / magnitude;
-        }
-    }
+    // Apply global speed factor to control overall cursor speed
+    x_curved = (int16_t)((float)x_curved * CURSOR_SPEED_FACTOR);
+    y_curved = (int16_t)((float)y_curved * CURSOR_SPEED_FACTOR);
 
     // Clamp final value to make sure we don't under/overflow
-    if (y_limited < -127) { y_limited = -127; }
-    if (y_limited > 127) { y_limited = 127; }
-    if (x_limited < -127) { x_limited = -127; }
-    if (x_limited > 127) { x_limited = 127; }
-
-    x = x_limited;
-    y = y_limited;
+    x = clamp_value(x_curved, -127, 127);
+    y = clamp_value(y_curved, -127, 127);
 
     mouse_report.x = x;
     mouse_report.y = y;
 
     return mouse_report;
-}
-
-void pointing_device_driver_init(void) {
 }
 
 void check_encoder_push(void) {
