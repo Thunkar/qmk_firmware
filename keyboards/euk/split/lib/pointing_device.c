@@ -179,7 +179,7 @@ report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     y_normalized = -y_normalized;
 
     // Apply dead zone to filter out center drift
-    const int16_t dead_zone = 2;
+    const int16_t dead_zone = 5;
     if (abs(x_normalized) < dead_zone) {
         x_normalized = 0;
     }
