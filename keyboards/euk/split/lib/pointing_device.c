@@ -120,7 +120,7 @@ static int16_t apply_report_throttle(int16_t value, uint8_t skip_count, uint8_t 
 
 // Apply three-stage curve: flat center, linear middle, quadratic high
 static int16_t apply_curve(int16_t normalized_value) {
-    const int16_t center_threshold = 50;      // Flat center region endpoint
+    const int16_t center_threshold = 75;      // Flat center region endpoint
     const int16_t high_threshold = 90;        // High acceleration zone starting point
     const int16_t center_flat_value = 35;      // Constant output value for center region
 
