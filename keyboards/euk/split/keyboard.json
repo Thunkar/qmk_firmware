@@ -15,6 +15,12 @@
         "pointing_device": true
     },
     "rgb_matrix": {
+        "default": {
+            "animation": "solid_color",
+            "hue": 133,
+            "sat": 156,
+            "val": 255
+        },
         "animations": {
             "band_pinwheel_sat": true,
             "band_pinwheel_val": true,

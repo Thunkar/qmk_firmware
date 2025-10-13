@@ -118,11 +118,13 @@ static int16_t apply_report_throttle(int16_t value, uint8_t skip_count, uint8_t 
     return 0;
 }
 
-// Apply three-stage curve: flat center, linear middle, quadratic high
+// Apply two-stage curve: flat center, dampened linear
 static int16_t apply_curve(int16_t normalized_value) {
-    const int16_t center_threshold = 75;      // Flat center region endpoint
-    const int16_t high_threshold = 90;        // High acceleration zone starting point
-    const int16_t center_flat_value = 35;      // Constant output value for center region
+    // Configuration constants
+    const int16_t center_threshold = 50;  // Flat center region endpoint
+    const int16_t center_flat_value = 35; // Constant output value for center region
+    const int16_t linear_dampening = 1;   // Dampening factor for linear region (divisor)
+    const int16_t max_input = 100;        // Maximum normalized input value
 
     // Handle zero case explicitly to avoid drift when centered
     if (normalized_value == 0) {
@@ -135,27 +137,16 @@ static int16_t apply_curve(int16_t normalized_value) {
     if (abs_val <= center_threshold) {
         // Flat center region: constant output to overcome global dampening
         return sign * center_flat_value;
-    } else if (abs_val <= high_threshold) {
-        // Linear middle region: interpolate from flat center value to high threshold
-        int16_t range_start = center_flat_value;
-        int16_t range_end = high_threshold;
-        int16_t input_range = high_threshold - center_threshold;
-        int16_t output_range = range_end - range_start;
-
+    } else {
+        // Dampened linear region: apply dampening factor to the slope
+        int16_t input_range = max_input - center_threshold;
         int16_t offset = abs_val - center_threshold;
-        int16_t linear_value = range_start + (offset * output_range) / input_range;
+
+        // Calculate dampened output range
+        int16_t dampened_output_range = input_range / linear_dampening;
+        int16_t linear_value = center_flat_value + (offset * dampened_output_range) / input_range;
 
         return sign * linear_value;
-    } else {
-        // Quadratic high region: gentle acceleration beyond the high threshold
-        int16_t linear_end = high_threshold;
-        int16_t excess = abs_val - high_threshold;
-
-        // Apply gentle quadratic curve to the excess deflection
-        // Scaled to provide smooth acceleration for precise fast movements
-        int16_t quadratic_part = (excess * excess * 102) / 225;
-
-        return sign * (linear_end + quadratic_part);
     }
 }
 
