@@ -118,13 +118,14 @@ static int16_t apply_report_throttle(int16_t value, uint8_t skip_count, uint8_t 
     return 0;
 }
 
-// Apply two-stage curve: flat center, dampened linear
+// Apply three-stage curve: flat center, undampened linear, amplified linear at high deflection
 static int16_t apply_curve(int16_t normalized_value) {
     // Configuration constants
-    const int16_t center_threshold = 50;  // Flat center region endpoint
-    const int16_t center_flat_value = 35; // Constant output value for center region
-    const int16_t linear_dampening = 1;   // Dampening factor for linear region (divisor)
-    const int16_t max_input = 100;        // Maximum normalized input value
+    const int16_t center_threshold = 50;     // Flat center region endpoint
+    const int16_t center_flat_value = 35;    // Constant output value for center region
+    const int16_t high_deflection_threshold = 90; // Threshold for high deflection amplification (90% of max)
+    const int16_t high_deflection_amplification = 5;  // Amplification factor for high deflection region (multiplier)
+    const int16_t max_input = 100;           // Maximum normalized input value
 
     // Handle zero case explicitly to avoid drift when centered
     if (normalized_value == 0) {
@@ -137,14 +138,23 @@ static int16_t apply_curve(int16_t normalized_value) {
     if (abs_val <= center_threshold) {
         // Flat center region: constant output to overcome global dampening
         return sign * center_flat_value;
-    } else {
-        // Dampened linear region: apply dampening factor to the slope
-        int16_t input_range = max_input - center_threshold;
+    } else if (abs_val <= high_deflection_threshold) {
+        // First linear region: no dampening (1:1 slope)
         int16_t offset = abs_val - center_threshold;
+        int16_t linear_value = center_flat_value + offset;
 
-        // Calculate dampened output range
-        int16_t dampened_output_range = input_range / linear_dampening;
-        int16_t linear_value = center_flat_value + (offset * dampened_output_range) / input_range;
+        return sign * linear_value;
+    } else {
+        // Second linear region: amplified for high deflection
+        int16_t first_linear_range = high_deflection_threshold - center_threshold;
+        int16_t first_linear_max_value = center_flat_value + first_linear_range;
+
+        int16_t high_input_range = max_input - high_deflection_threshold;
+        int16_t high_offset = abs_val - high_deflection_threshold;
+
+        // Calculate amplified output range for high deflection
+        int16_t amplified_output_range = high_input_range * high_deflection_amplification;
+        int16_t linear_value = first_linear_max_value + (high_offset * amplified_output_range) / high_input_range;
 
         return sign * linear_value;
     }
