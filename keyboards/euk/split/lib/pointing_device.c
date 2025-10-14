@@ -123,7 +123,7 @@ static int16_t apply_curve(int16_t normalized_value) {
     // Configuration constants
     const int16_t center_threshold = 50;     // Flat center region endpoint
     const int16_t center_flat_value = 35;    // Constant output value for center region
-    const int16_t high_deflection_threshold = 90; // Threshold for high deflection amplification (90% of max)
+    const int16_t high_deflection_threshold = 95; // Threshold for high deflection amplification
     const int16_t high_deflection_amplification = 5;  // Amplification factor for high deflection region (multiplier)
     const int16_t max_input = 100;           // Maximum normalized input value
 
