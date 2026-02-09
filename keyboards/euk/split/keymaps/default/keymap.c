@@ -93,12 +93,29 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
       _______ , _______ , _______ , _______ , _______ , _______ ,                                            _______ , _______ , _______ , _______ , _______ , _______ ,
       _______ , _______ , _______ , _______ , _______ , _______ ,                                            _______ , A(KC_LEFT) , _______ , A(KC_RIGHT) , _______ , _______ ,
       _______ , _______ , _______ , _______ , _______ , _______ ,                                            _______ , _______ , _______ , _______ , _______ , _______ ,
-      _______ , _______ , _______ , _______ , _______ ,                                                                _______ , _______ , _______ , _______ , _______ ,
+      _______ , _______ , _______ , _______ , _______ ,                                                                _______ , _______ , _______ , _______ , QK_BOOT ,
                                                                 _______ , _______ ,       _______  , _______ ,
                                                                 _______ , _______ ,       _______  , _______
     ),
 };
 // clang-format on
+
+bool encoder_update_user(uint8_t index, bool clockwise) {
+    if (IS_LAYER_ON(_UTIL)) {
+        if (clockwise) {
+            rgb_matrix_increase_val();
+        } else {
+            rgb_matrix_decrease_val();
+        }
+    } else {
+        if (clockwise) {
+            tap_code(KC_VOLU);
+        } else {
+            tap_code(KC_VOLD);
+        }
+    }
+    return false;
+}
 
 void keyboard_post_init_user(void) {
     transaction_register_rpc(POINTING_DEVICE_SYNC, user_pointing_device_sync_handler);
@@ -107,6 +124,8 @@ void keyboard_post_init_user(void) {
 void housekeeping_task_user(void) {
     if (is_keyboard_master()) {
         sync_with_slave();
+    }
+    if (is_keyboard_left()) {
         check_encoder_push();
     } else {
         sample_joystick();
@@ -203,7 +222,7 @@ static void render_right(void) {
 
 // Draw to OLED
 bool oled_task_user() {
-    if (is_keyboard_master()) {
+    if (is_keyboard_left()) {
         render_left();
     } else {
         render_right();
